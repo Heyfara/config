@@ -1,0 +1,7 @@
+# Plugins tmux installés par TPM (à réinstaller via <prefix> + I)
+tmux/.config/tmux/plugins/
+
+# Fichiers OS / éditeurs
+.DS_Store
+*.swp
+*~
