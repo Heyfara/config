@@ -91,73 +91,122 @@ function M.agents()
     end)
 end
 
--- LEADER+f : workspaces en arborescence (inspections sous leur repo) + badges
-function M.workspaces()
-    return wezterm.action_callback(function(window, pane)
-        local by_ws = {}
-        for _, a in ipairs(state.scan()) do
-            local ws = a.workspace or ''
-            by_ws[ws] = by_ws[ws] or { waiting = 0, done = 0, working = 0 }
-            if by_ws[ws][a.state] then by_ws[ws][a.state] = by_ws[ws][a.state] + 1 end
-        end
+-- Workspaces dans l'ordre de l'arborescence : chaque repo suivi de ses
+-- workspaces d'inspection « repo › tâche » ; inspections orphelines à la racine.
+local function ordered_workspaces()
+    local names = wezterm.mux.get_workspace_names()
+    table.sort(names)
+    local exists = {}
+    for _, name in ipairs(names) do exists[name] = true end
 
-        -- Ordre : chaque repo suivi de ses workspaces d'inspection
-        local names = wezterm.mux.get_workspace_names()
-        table.sort(names)
-        local ordered = {}
-        for _, name in ipairs(names) do
-            if not name:find(M.SUB_SEP, 1, true) then
-                table.insert(ordered, { name = name, child = false })
-                for _, sub in ipairs(names) do
-                    if sub:sub(1, #name + #M.SUB_SEP) == name .. M.SUB_SEP then
-                        table.insert(ordered, { name = sub, child = true })
-                    end
+    local ordered = {}
+    for _, name in ipairs(names) do
+        local i = name:find(M.SUB_SEP, 1, true)
+        if not i then
+            table.insert(ordered, { name = name, short = name, child = false })
+            for _, sub in ipairs(names) do
+                if sub:sub(1, #name + #M.SUB_SEP) == name .. M.SUB_SEP then
+                    table.insert(ordered, { name = sub, short = sub:sub(#name + #M.SUB_SEP + 1), child = true })
                 end
             end
+        elseif not exists[name:sub(1, i - 1)] then
+            table.insert(ordered, { name = name, short = name, child = false })
         end
-        -- Inspections dont le repo n'a plus de workspace : à la racine
-        local exists = {}
-        for _, name in ipairs(names) do exists[name] = true end
-        for _, name in ipairs(names) do
-            local i = name:find(M.SUB_SEP, 1, true)
-            if i and not exists[name:sub(1, i - 1)] then
-                table.insert(ordered, { name = name, child = false })
+    end
+    return ordered
+end
+
+-- Onglets d'un workspace, dans l'ordre : { index, tab, agent (le plus urgent) }
+local function workspace_tabs(workspace, agents_by_pane)
+    local result = {}
+    for _, mux_window in ipairs(wezterm.mux.all_windows()) do
+        if mux_window:get_workspace() == workspace then
+            for _, info in ipairs(mux_window:tabs_with_info()) do
+                local best
+                for _, p in ipairs(info.tab:panes()) do
+                    local a = agents_by_pane[p:pane_id()]
+                    if a and (not best or (state.priority[a.state] or 9) < (state.priority[best.state] or 9)) then
+                        best = a
+                    end
+                end
+                table.insert(result, { index = info.index + 1, tab = info.tab, agent = best })
             end
         end
+    end
+    return result
+end
+
+-- LEADER+f : arborescence workspaces → onglets, avec l'état des agents.
+-- Entrée sur un workspace : bascule ; sur un onglet : y va directement.
+function M.workspaces()
+    return wezterm.action_callback(function(window, pane)
+        local agents_by_pane = {}
+        for _, a in ipairs(state.scan()) do agents_by_pane[a.pane_id] = a end
 
         local current = window:active_workspace()
         local choices = {}
-        for _, ws in ipairs(ordered) do
-            local counts = by_ws[ws.name] or {}
-            local items = {
-                { Foreground = { Color = ws.name == current and c.lavender or c.overlay0 } },
-                { Text = (ws.name == current and '▶ ' or '  ') },
-                { Foreground = { Color = c.text } },
-            }
-            if ws.child then
-                table.insert(items, { Text = '  └ ' .. ws.name:sub(ws.name:find(M.SUB_SEP, 1, true) + #M.SUB_SEP) })
-            else
-                table.insert(items, { Text = icons.workspace .. ' ' .. ws.name })
-            end
-            local function badge(key, icon, color)
-                if (counts[key] or 0) > 0 then
-                    table.insert(items, { Foreground = { Color = color } })
-                    table.insert(items, { Text = '  ' .. icon .. ' ' .. counts[key] })
+        for _, ws in ipairs(ordered_workspaces()) do
+            local indent = ws.child and '    ' or ''
+            local is_current = ws.name == current
+            table.insert(choices, {
+                id = 'ws:' .. ws.name,
+                label = wezterm.format({
+                    { Foreground = { Color = is_current and c.lavender or c.overlay0 } },
+                    { Text = (is_current and '▶ ' or '  ') .. indent },
+                    { Foreground = { Color = ws.child and c.peach or c.lavender } },
+                    { Attribute = { Intensity = 'Bold' } },
+                    { Text = (ws.child and '└ ' or (icons.workspace .. ' ')) .. ws.short },
+                }),
+            })
+
+            for _, t in ipairs(workspace_tabs(ws.name, agents_by_pane)) do
+                local a = t.agent
+                local pane_for_tab = a and a.pane or t.tab:active_pane()
+                local title = t.tab:get_title()
+                if title == '' then
+                    title = (a and a.worktree) or state.clean_title(pane_for_tab:get_title())
                 end
+
+                local items = {
+                    { Foreground = { Color = c.overlay0 } },
+                    { Text = '  ' .. indent .. '   ' .. string.format('%2d', t.index) .. ' ' },
+                }
+                if a then
+                    local icon, color = state_icon(a)
+                    table.insert(items, { Foreground = { Color = color } })
+                    table.insert(items, { Text = icon .. ' ' })
+                    table.insert(items, { Foreground = { Color = c.text } })
+                    table.insert(items, { Text = pad(title, 24) .. ' ' })
+                    table.insert(items, { Foreground = { Color = c.subtext0 } })
+                    table.insert(items, { Attribute = { Italic = true } })
+                    table.insert(items, { Text = pad(agent_message(a), 50) })
+                    table.insert(items, 'ResetAttributes')
+                    table.insert(items, { Foreground = { Color = c.overlay0 } })
+                    table.insert(items, { Text = ' ' .. elapsed(a.ts) })
+                else
+                    table.insert(items, { Foreground = { Color = c.subtext1 } })
+                    table.insert(items, { Text = '  ' .. title })
+                end
+                table.insert(choices, {
+                    id = 'pane:' .. pane_for_tab:pane_id(),
+                    label = wezterm.format(items),
+                })
             end
-            badge('waiting', icons.permission, c.red)
-            badge('done', icons.done, c.yellow)
-            badge('working', icons.working, c.green)
-            table.insert(choices, { id = ws.name, label = wezterm.format(items) })
         end
 
         window:perform_action(act.InputSelector {
             title = 'Workspaces',
             fuzzy = true,
-            fuzzy_description = 'Workspace : ',
+            fuzzy_description = 'Workspace / onglet : ',
             choices = choices,
             action = wezterm.action_callback(function(w, p, id)
-                if id then w:perform_action(act.SwitchToWorkspace { name = id }, p) end
+                if not id then return end
+                local kind, value = id:match('^(%a+):(.*)$')
+                if kind == 'ws' then
+                    w:perform_action(act.SwitchToWorkspace { name = value }, p)
+                elseif kind == 'pane' then
+                    nav.focus_pane(w, tonumber(value))
+                end
             end),
         }, pane)
     end)

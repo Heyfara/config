@@ -45,6 +45,12 @@ function M.repo_from_cwd(cwd)
     return root:match('([^/]+)/?$')
 end
 
+-- Titre de panneau sans le préfixe spinner/symbole que Claude y met
+function M.clean_title(title)
+    title = (title or ''):gsub('^[^%w%-_~/%.]+', '')
+    return title
+end
+
 -- Lit tous les états, les relie aux panneaux de cette instance et nettoie les orphelins.
 function M.scan()
     local agents = {}

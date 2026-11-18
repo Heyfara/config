@@ -32,18 +32,12 @@ local function tab_agent(tab_id)
     return best
 end
 
--- Titre de panneau sans le préfixe spinner/symbole que Claude y met
-local function clean_title(title)
-    title = (title or ''):gsub('^[^%w%-_~/%.]+', '')
-    return title
-end
-
 wezterm.on('format-tab-title', function(tab, _, _, _, hover, max_width)
     local agent = tab_agent(tab.tab_id)
 
     local label = tab.tab_title
     if not label or label == '' then
-        label = (agent and agent.worktree) or clean_title(tab.active_pane.title)
+        label = (agent and agent.worktree) or state.clean_title(tab.active_pane.title)
     end
 
     local bg, fg = c.mantle, c.overlay1
