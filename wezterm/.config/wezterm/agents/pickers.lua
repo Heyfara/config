@@ -116,11 +116,13 @@ local function ordered_workspaces()
     return ordered
 end
 
--- Onglets d'un workspace, dans l'ordre : { index, tab, agent (le plus urgent) }
-local function workspace_tabs(workspace, agents_by_pane)
-    local result = {}
+-- Fenêtres d'un workspace, chacune avec ses onglets dans l'ordre :
+-- { mux_window, tabs = { { index, tab, agent (le plus urgent) } } }
+local function workspace_windows(workspace, agents_by_pane)
+    local windows = {}
     for _, mux_window in ipairs(wezterm.mux.all_windows()) do
         if mux_window:get_workspace() == workspace then
+            local result = {}
             for _, info in ipairs(mux_window:tabs_with_info()) do
                 local best
                 for _, p in ipairs(info.tab:panes()) do
@@ -131,9 +133,10 @@ local function workspace_tabs(workspace, agents_by_pane)
                 end
                 table.insert(result, { index = info.index + 1, tab = info.tab, agent = best })
             end
+            table.insert(windows, { mux_window = mux_window, tabs = result })
         end
     end
-    return result
+    return windows
 end
 
 -- LEADER+f : arborescence workspaces → onglets, avec l'état des agents.
@@ -159,38 +162,54 @@ function M.workspaces()
                 }),
             })
 
-            for _, t in ipairs(workspace_tabs(ws.name, agents_by_pane)) do
-                local a = t.agent
-                local pane_for_tab = a and a.pane or t.tab:active_pane()
-                local title = t.tab:get_title()
-                if title == '' then
-                    title = (a and a.worktree) or state.clean_title(pane_for_tab:get_title())
+            local windows = workspace_windows(ws.name, agents_by_pane)
+            local my_window_id = window:mux_window():window_id()
+            for wi, win in ipairs(windows) do
+                local sub = ''
+                if #windows > 1 then
+                    sub = '  '
+                    local mine = win.mux_window:window_id() == my_window_id
+                    table.insert(choices, {
+                        id = 'pane:' .. win.mux_window:active_pane():pane_id(),
+                        label = wezterm.format({
+                            { Foreground = { Color = c.overlay1 } },
+                            { Text = '  ' .. indent .. '   ' .. icons.window .. ' fenêtre ' .. wi .. (mine and ' (celle-ci)' or '') },
+                        }),
+                    })
                 end
+                for _, t in ipairs(win.tabs) do
+                    local a = t.agent
+                    local pane_for_tab = a and a.pane or t.tab:active_pane()
+                    local title = t.tab:get_title()
+                    if title == '' then
+                        title = (a and a.worktree) or state.clean_title(pane_for_tab:get_title())
+                    end
 
-                local items = {
-                    { Foreground = { Color = c.overlay0 } },
-                    { Text = '  ' .. indent .. '   ' .. string.format('%2d', t.index) .. ' ' },
-                }
-                if a then
-                    local icon, color = state_icon(a)
-                    table.insert(items, { Foreground = { Color = color } })
-                    table.insert(items, { Text = icon .. ' ' })
-                    table.insert(items, { Foreground = { Color = c.text } })
-                    table.insert(items, { Text = pad(title, 24) .. ' ' })
-                    table.insert(items, { Foreground = { Color = c.subtext0 } })
-                    table.insert(items, { Attribute = { Italic = true } })
-                    table.insert(items, { Text = pad(agent_message(a), 50) })
-                    table.insert(items, 'ResetAttributes')
-                    table.insert(items, { Foreground = { Color = c.overlay0 } })
-                    table.insert(items, { Text = ' ' .. elapsed(a.ts) })
-                else
-                    table.insert(items, { Foreground = { Color = c.subtext1 } })
-                    table.insert(items, { Text = '  ' .. title })
+                    local items = {
+                        { Foreground = { Color = c.overlay0 } },
+                        { Text = '  ' .. indent .. sub .. '   ' .. string.format('%2d', t.index) .. ' ' },
+                    }
+                    if a then
+                        local icon, color = state_icon(a)
+                        table.insert(items, { Foreground = { Color = color } })
+                        table.insert(items, { Text = icon .. ' ' })
+                        table.insert(items, { Foreground = { Color = c.text } })
+                        table.insert(items, { Text = pad(title, 24) .. ' ' })
+                        table.insert(items, { Foreground = { Color = c.subtext0 } })
+                        table.insert(items, { Attribute = { Italic = true } })
+                        table.insert(items, { Text = pad(agent_message(a), 50) })
+                        table.insert(items, 'ResetAttributes')
+                        table.insert(items, { Foreground = { Color = c.overlay0 } })
+                        table.insert(items, { Text = ' ' .. elapsed(a.ts) })
+                    else
+                        table.insert(items, { Foreground = { Color = c.subtext1 } })
+                        table.insert(items, { Text = '  ' .. title })
+                    end
+                    table.insert(choices, {
+                        id = 'pane:' .. pane_for_tab:pane_id(),
+                        label = wezterm.format(items),
+                    })
                 end
-                table.insert(choices, {
-                    id = 'pane:' .. pane_for_tab:pane_id(),
-                    label = wezterm.format(items),
-                })
             end
         end
 

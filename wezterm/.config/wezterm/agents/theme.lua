@@ -33,6 +33,7 @@ M.icons = {
     idle = nf.md_robot_outline,
     workspace = nf.md_folder,
     host = nf.md_monitor,
+    window = nf.md_dock_window or nf.md_window_maximize or '',
     round_right = nf.ple_right_half_circle_thick,
     round_left = nf.ple_left_half_circle_thick,
 }

@@ -10,6 +10,15 @@ function M.focus_pane(window, pane_id)
     local mux_window = tab and tab:window()
     if not mux_window then return false end
 
+    -- Panneau déjà affiché dans une autre fenêtre : c'est elle qu'on met au premier plan
+    local gui = mux_window:gui_window()
+    if gui and mux_window:window_id() ~= window:mux_window():window_id() then
+        tab:activate()
+        pane:activate()
+        gui:focus()
+        return true
+    end
+
     local workspace = mux_window:get_workspace()
     if workspace ~= window:active_workspace() then
         window:perform_action(wezterm.action.SwitchToWorkspace { name = workspace }, window:active_pane())
