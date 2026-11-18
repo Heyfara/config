@@ -3,6 +3,7 @@
 local wezterm = require 'wezterm'
 local state = require 'agents.state'
 local theme = require 'agents.theme'
+local notify = require 'agents.notify'
 
 local c = theme.colors
 local icons = theme.icons
@@ -129,6 +130,8 @@ end
 
 wezterm.on('update-status', function(window)
     local agents = state.refresh()
+    notify.consume_focus_request(window)
+    notify.check(window, agents)
     window:set_left_status(left_status(window))
     window:set_right_status(right_status(agents))
 end)
