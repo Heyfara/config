@@ -73,7 +73,7 @@ def main():
     except (OSError, ValueError):
         current = {}
 
-    state, message = None, None
+    state, message, kind = None, None, ""
     if event == "SessionStart":
         state, message = "idle", ""
         current.pop("task", None)
@@ -84,17 +84,18 @@ def main():
     elif event == "PreToolUse":
         if data.get("tool_name") == "AskUserQuestion":
             qs = data.get("tool_input", {}).get("questions") or [{}]
-            state, message = "waiting", "Question : " + short(qs[0].get("question"))
+            state, message, kind = "waiting", short(qs[0].get("question")), "question"
         else:
             state, message = "working", ""
     elif event in ("PostToolUse", "PostToolUseFailure"):
         state, message = "working", ""
     elif event == "PermissionRequest":
-        state, message = "waiting", "Permission : " + short(data.get("tool_name"))
+        state, message, kind = "waiting", short(data.get("tool_name")), "permission"
     elif event == "Notification":
-        kind = data.get("notification_type", "")
-        if kind in ("permission_prompt", "elicitation_dialog"):
+        kind_ = data.get("notification_type", "")
+        if kind_ in ("permission_prompt", "elicitation_dialog"):
             state, message = "waiting", short(data.get("message"))
+            kind = "question" if kind_ == "elicitation_dialog" else "permission"
         else:
             return  # idle_prompt & co : on garde l'état « done »
     elif event == "Stop":
@@ -105,6 +106,7 @@ def main():
     current.update(
         state=state,
         message=message,
+        kind=kind,
         cwd=data.get("cwd") or current.get("cwd", ""),
         session_id=data.get("session_id") or current.get("session_id", ""),
         # Socket de l'instance WezTerm propriétaire du panneau (gui-sock-<pid>) :

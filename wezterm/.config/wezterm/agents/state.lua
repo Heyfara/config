@@ -69,6 +69,8 @@ function M.scan()
                         workspace = mux_window and mux_window:get_workspace(),
                         state = data.state or 'idle',
                         message = data.message or '',
+                        kind = data.kind or '',
+                        worktree = data.cwd and data.cwd:match('/%.claude/worktrees/([^/]+)'),
                         task = data.task,
                         cwd = data.cwd,
                         label = M.label_from_cwd(data.cwd),
@@ -102,6 +104,8 @@ function M.refresh()
         by_pane[tostring(a.pane_id)] = {
             state = a.state,
             message = a.message,
+            kind = a.kind,
+            worktree = a.worktree,
             label = a.label,
             repo = a.repo,
             workspace = a.workspace,
