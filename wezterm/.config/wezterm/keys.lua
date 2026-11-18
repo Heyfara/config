@@ -1,6 +1,7 @@
 local wezterm = require 'wezterm'
 local projects = require 'projects'
 local pickers = require 'agents.pickers'
+local tasks = require 'agents.tasks'
 
 local module = {}
 
@@ -39,6 +40,17 @@ function module.apply_to_config(config)
             mods = 'LEADER',
             -- Tous les agents, triés par urgence
             action = pickers.agents(),
+        },
+        {
+            key = 'n',
+            mods = 'LEADER',
+            -- Nouvelle tâche : onglet + claude -w <nom>
+            action = tasks.new_task(),
+        },
+        {
+            key = ',',
+            mods = 'LEADER',
+            action = tasks.rename_tab(),
         },
         {
             key = 'j',
