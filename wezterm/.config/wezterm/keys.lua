@@ -1,5 +1,6 @@
 local wezterm = require 'wezterm'
 local projects = require 'projects'
+local pickers = require 'agents.pickers'
 
 local module = {}
 
@@ -30,8 +31,20 @@ function module.apply_to_config(config)
         {
             key = 'f',
             mods = 'LEADER',
-            -- Present a list of existing workspaces
-            action = wezterm.action.ShowLauncherArgs { flags = 'FUZZY|WORKSPACES' },
+            -- Workspaces en arborescence avec badges d'agents
+            action = pickers.workspaces(),
+        },
+        {
+            key = 's',
+            mods = 'LEADER',
+            -- Tous les agents, triés par urgence
+            action = pickers.agents(),
+        },
+        {
+            key = 'j',
+            mods = 'LEADER',
+            -- Agent qui attend depuis le plus longtemps
+            action = pickers.jump_next(),
         },
         {
             key = 'c',
