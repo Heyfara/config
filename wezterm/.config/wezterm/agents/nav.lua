@@ -11,8 +11,10 @@ function M.focus_pane(window, pane_id)
     if not mux_window then return false end
 
     -- Panneau déjà affiché dans une autre fenêtre : c'est elle qu'on met au premier plan
-    local gui = mux_window:gui_window()
-    if gui and mux_window:window_id() ~= window:mux_window():window_id() then
+    -- gui_window() lève une erreur (au lieu de renvoyer nil) si ce workspace
+    -- n'est affiché nulle part
+    local ok_gui, gui = pcall(function() return mux_window:gui_window() end)
+    if ok_gui and gui and mux_window:window_id() ~= window:mux_window():window_id() then
         tab:activate()
         pane:activate()
         gui:focus()
