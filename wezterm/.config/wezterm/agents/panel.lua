@@ -13,7 +13,20 @@ M.TITLE = 'agent-panel'
 
 local WEZTERM_BIN = wezterm.executable_dir .. '/wezterm'
 
+-- Panneaux ouverts par LEADER+b : seuls autorisés à envoyer des actions
+-- (sinon n'importe quelle sortie de terminal, ex. un cat ou un ssh, le pourrait).
+local function registry()
+    return wezterm.GLOBAL.agent_panels or {}
+end
+
+local function set_registered(pane_id, value)
+    local r = registry()
+    r[tostring(pane_id)] = value
+    wezterm.GLOBAL.agent_panels = r
+end
+
 local function kill(pane_id)
+    set_registered(pane_id, nil)
     wezterm.run_child_process({ WEZTERM_BIN, 'cli', 'kill-pane', '--pane-id', tostring(pane_id) })
 end
 
@@ -21,7 +34,7 @@ end
 function M.toggle()
     return wezterm.action_callback(function(_, pane)
         for _, p in ipairs(pane:tab():panes()) do
-            if p:get_title() == M.TITLE then
+            if registry()[tostring(p:pane_id())] then
                 kill(p:pane_id())
                 return
             end
@@ -33,12 +46,18 @@ function M.toggle()
             args = { wezterm.config_dir .. '/bin/agent-panel' },
             set_environment_variables = { AGENT_PANEL_WEZTERM = WEZTERM_BIN },
         })
+        set_registered(panel:pane_id(), true)
         panel:activate()
     end)
 end
 
 wezterm.on('user-var-changed', function(window, pane, name, value)
     if name ~= 'agent_panel' then return end
+    if not registry()[tostring(pane:pane_id())] then
+        wezterm.log_warn('agent_panel ignoré : panneau ' .. pane:pane_id() .. ' non ouvert par LEADER+b')
+        return
+    end
+    set_registered(pane:pane_id(), nil) -- une action par panneau : il se ferme ensuite
     local ok, msg = pcall(wezterm.serde.json_decode, value)
     if not ok or type(msg) ~= 'table' then return end
 

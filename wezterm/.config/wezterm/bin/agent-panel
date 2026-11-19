@@ -23,9 +23,7 @@ import tty
 SOCKET = os.environ.get("WEZTERM_UNIX_SOCKET", "")
 SELF_PANE = int(os.environ.get("WEZTERM_PANE", "-1"))
 WEZTERM = os.environ.get("AGENT_PANEL_WEZTERM") or "wezterm"
-STATE_DIR = os.path.join(
-    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "wezterm-agents"
-)
+STATE_DIR = os.path.expanduser("~/.local/state/wezterm-agents")  # comme bin/agent-hook
 SUB_SEP = " › "
 
 # Catppuccin Mocha (comme agents/theme.lua)
@@ -101,6 +99,23 @@ def load_agents():
 
 
 _git_cache = {}
+_base_cache = {}
+
+
+def branch_base(wt):
+    """Point de départ de la branche du worktree (merge-base avec la branche
+    par défaut), pour compter aussi ce que l'agent a déjà commité. HEAD à défaut."""
+    if wt in _base_cache:
+        return _base_cache[wt]
+    base = "HEAD"
+    for ref in ("origin/HEAD", "main", "master"):
+        r = subprocess.run(["git", "-C", wt, "merge-base", "HEAD", ref],
+                           capture_output=True, text=True, timeout=2)
+        if r.returncode == 0 and r.stdout.strip():
+            base = r.stdout.strip()
+            break
+    _base_cache[wt] = base
+    return base
 
 
 def git_stats(cwd):
@@ -114,7 +129,7 @@ def git_stats(cwd):
         return hit[1]
     stats = None
     try:
-        out = subprocess.run(["git", "-C", wt, "diff", "--shortstat", "HEAD"],
+        out = subprocess.run(["git", "-C", wt, "diff", "--shortstat", branch_base(wt)],
                              capture_output=True, text=True, timeout=2).stdout
         new = subprocess.run(["git", "-C", wt, "ls-files", "--others", "--exclude-standard"],
                              capture_output=True, text=True, timeout=2).stdout
@@ -320,6 +335,26 @@ def send(cmd, kind, value):
     sys.stdout.flush()
 
 
+def tokens(data):
+    """Découpe une lecture clavier en touches : séquences souris SGR, flèches,
+    autres séquences CSI (ignorées), Échap seul, caractères simples."""
+    i = 0
+    while i < len(data):
+        m = re.match(rb"\x1b\[<\d+;\d+;\d+[Mm]", data[i:])
+        if m:
+            yield m.group(0)
+            i += len(m.group(0))
+        elif data[i:i + 2] == b"\x1b[":
+            j = i + 2
+            while j < len(data) and not 0x40 <= data[j] <= 0x7E:
+                j += 1
+            yield data[i:j + 1]
+            i = j + 1
+        else:
+            yield data[i:i + 1]
+            i += 1
+
+
 def main():
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
@@ -360,52 +395,49 @@ def main():
             ready, _, _ = select.select([fd], [], [], 1.0)
             if not ready:
                 continue
-            data = os.read(fd, 64)
             n = len(items)
+            cur = sel if sel is not None else 0
 
-            def move(delta):
-                nonlocal sel_key
-                if n:
-                    cur = sel if sel is not None else 0
-                    sel_key = items[max(0, min(n - 1, cur + delta))]
+            # Plusieurs touches peuvent arriver d'un coup (« jj » tapé vite) :
+            # on les traite une par une.
+            for tok in tokens(os.read(fd, 256)):
+                action = None
+                mouse = re.match(rb"\x1b\[<(\d+);(\d+);(\d+)([Mm])", tok)
+                if mouse:
+                    b, y, kind = int(mouse.group(1)), int(mouse.group(3)), mouse.group(4)
+                    if b == 64:
+                        cur -= 1
+                    elif b == 65:
+                        cur += 1
+                    elif b == 0 and kind == b"M":
+                        idx = scroll + y - 1
+                        if 0 <= idx < len(lines) and lines[idx][1] is not None:
+                            cur, action = lines[idx][1], "go"
+                elif tok in (b"j", b"\x1b[B"):
+                    cur += 1
+                elif tok in (b"k", b"\x1b[A"):
+                    cur -= 1
+                elif tok == b"g":
+                    cur = 0
+                elif tok == b"G":
+                    cur = n - 1
+                elif tok in (b"\r", b"\n"):
+                    action = "go"
+                elif tok == b"i":
+                    action = "inspect"
+                elif tok == b"x":
+                    action = "close"
+                elif tok in (b"q", b"\x1b", b"\x03"):
+                    return
 
-            mouse = re.match(rb"\x1b\[<(\d+);(\d+);(\d+)([Mm])", data)
-            if mouse:
-                b, y, kind = int(mouse.group(1)), int(mouse.group(3)), mouse.group(4)
-                if b == 64:
-                    move(-1)
-                elif b == 65:
-                    move(1)
-                elif b == 0 and kind == b"M":
-                    idx = scroll + y - 1
-                    if 0 <= idx < len(lines) and lines[idx][1] is not None:
-                        sel_key = items[lines[idx][1]]
-                        send("go", *sel_key)
-                        time.sleep(0.1)
-                        return
-                continue
-            if data in (b"j", b"\x1b[B"):
-                move(1)
-            elif data in (b"k", b"\x1b[A"):
-                move(-1)
-            elif data == b"g":
-                move(-n)
-            elif data == b"G":
-                move(n)
-            elif data in (b"\r", b"\n") and sel_key:
-                send("go", *sel_key)
-                time.sleep(0.1)
-                return
-            elif data == b"i" and sel_key and sel_key[0] == "pane":
-                send("inspect", *sel_key)
-                time.sleep(0.1)
-                return
-            elif data == b"x" and sel_key and sel_key[0] == "pane":
-                send("close", *sel_key)
-                time.sleep(0.1)
-                return
-            elif data in (b"q", b"\x1b", b"\x03"):
-                return
+                if not n:
+                    continue
+                cur = max(0, min(n - 1, cur))
+                sel_key = items[cur]
+                if action == "go" or (action and sel_key[0] == "pane"):
+                    send(action, *sel_key)
+                    time.sleep(0.1)
+                    return
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
         sys.stdout.write("\033[?1000l\033[?1006l\033[?7h\033[?25h\033[?1049l")
