@@ -10,8 +10,7 @@ local icons = theme.icons
 
 local M = {}
 
--- Séparateur des workspaces d'inspection : « repo › tâche » (étape 6)
-M.SUB_SEP = ' › '
+M.SUB_SEP = state.SUB_SEP
 
 local function elapsed(ts)
     local d = os.time() - (ts or 0)

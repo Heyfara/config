@@ -6,6 +6,9 @@ local M = {}
 
 M.dir = (os.getenv('XDG_STATE_HOME') or (wezterm.home_dir .. '/.local/state')) .. '/wezterm-agents'
 
+-- Workspaces d'inspection : « repo › tâche »
+M.SUB_SEP = ' › '
+
 -- Plus petit = plus urgent
 M.priority = { waiting = 1, done = 2, working = 3, idle = 4 }
 

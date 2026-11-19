@@ -53,6 +53,18 @@ function module.apply_to_config(config)
             action = tasks.rename_tab(),
         },
         {
+            key = 'i',
+            mods = 'LEADER',
+            -- Inspecter la tâche : workspace « repo › tâche » sur le worktree
+            action = tasks.inspect(),
+        },
+        {
+            key = 'w',
+            mods = 'LEADER',
+            -- Clôturer la tâche : onglets + worktree si propre et poussé
+            action = tasks.close_task(),
+        },
+        {
             key = 'j',
             mods = 'LEADER',
             -- Agent qui attend depuis le plus longtemps
