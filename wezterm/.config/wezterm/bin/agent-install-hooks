@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Ajoute les hooks bin/agent-hook dans ~/.claude/settings.json (idempotent).
+
+Les autres réglages et hooks existants sont conservés ; une sauvegarde
+settings.json.bak-<date> est créée avant toute écriture.
+"""
+import json
+import os
+import shutil
+import sys
+import time
+
+COMMAND = "$HOME/.config/wezterm/bin/agent-hook"
+EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+          "Notification", "Stop", "SessionEnd"]
+
+path = os.path.expanduser("~/.claude/settings.json")
+try:
+    with open(path) as f:
+        settings = json.load(f)
+except FileNotFoundError:
+    settings = {}
+
+hooks = settings.setdefault("hooks", {})
+added = []
+for event in EVENTS:
+    groups = hooks.setdefault(event, [])
+    present = any(h.get("command") == COMMAND for g in groups for h in g.get("hooks", []))
+    if not present:
+        groups.append({"hooks": [{"type": "command", "command": COMMAND, "timeout": 5}]})
+        added.append(event)
+
+if not added:
+    print("Hooks déjà installés, rien à faire.")
+    sys.exit(0)
+
+os.makedirs(os.path.dirname(path), exist_ok=True)
+if os.path.exists(path):
+    backup = f"{path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+    shutil.copy2(path, backup)
+    print(f"Sauvegarde : {backup}")
+with open(path, "w") as f:
+    json.dump(settings, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print("Hooks ajoutés : " + ", ".join(added))

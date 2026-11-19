@@ -20,10 +20,10 @@ local function read_file(path)
     return content
 end
 
-local function file_exists(path)
-    local f = io.open(path, 'r')
-    if f then f:close() return true end
-    return false
+-- io.open échoue sur une socket : on teste l'existence avec glob
+local function path_exists(path)
+    local ok, found = pcall(wezterm.glob, path)
+    return ok and #found > 0
 end
 
 -- Socket de cette instance GUI : seuls les fichiers qui la mentionnent nous concernent.
@@ -89,7 +89,7 @@ function M.scan()
                 else
                     os.remove(path) -- panneau fermé sans SessionEnd
                 end
-            elseif data.socket and data.socket ~= '' and not file_exists(data.socket) then
+            elseif data.socket and data.socket ~= '' and not path_exists(data.socket) then
                 os.remove(path) -- instance WezTerm disparue
             end
             -- sinon : autre instance vivante (ex. domaine unix), on ne touche à rien
