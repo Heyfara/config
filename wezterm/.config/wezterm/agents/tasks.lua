@@ -83,14 +83,15 @@ local function worktree_of(path)
     return path and path:match('^(.-/%.claude/worktrees/[^/]+)')
 end
 
+-- ok, stdout, stderr (sans les blancs finaux)
 local function git(dir, ...)
-    local ok, out = wezterm.run_child_process({ 'git', '-C', dir, ... })
-    return ok, (out or ''):gsub('%s+$', '')
+    local ok, out, err = wezterm.run_child_process({ 'git', '-C', dir, ... })
+    return ok, ((out or ''):gsub('%s+$', '')), ((err or ''):gsub('%s+$', ''))
 end
 
 -- Contexte de la tâche liée au panneau courant, qu'on soit dans l'onglet de
 -- l'agent ou dans le workspace d'inspection :
--- { repo, task, worktree, root, agent_pane_id, inspect_ws }
+-- { repo, task, worktree, root, agent_pane_id, agent_ws, inspect_ws }
 function M.context(pane)
     local ws = pane:tab():window():get_workspace()
     local agents = state.scan()
@@ -104,6 +105,7 @@ function M.context(pane)
         for _, a in ipairs(agents) do
             if a.worktree == task and a.repo == repo then
                 ctx.agent_pane_id, ctx.worktree = a.pane_id, worktree_of(a.cwd)
+                ctx.agent_ws = a.workspace
             end
         end
         ctx.worktree = ctx.worktree or worktree_of(M.pane_path(pane))
@@ -113,7 +115,8 @@ function M.context(pane)
         for _, p in ipairs(pane:tab():panes()) do in_tab[p:pane_id()] = true end
         for _, a in ipairs(agents) do
             if in_tab[a.pane_id] and a.worktree then
-                ctx = { repo = a.repo, task = a.worktree, agent_pane_id = a.pane_id, worktree = worktree_of(a.cwd) }
+                ctx = { repo = a.repo, task = a.worktree, agent_pane_id = a.pane_id,
+                        worktree = worktree_of(a.cwd), agent_ws = a.workspace }
                 break
             end
         end
@@ -241,15 +244,18 @@ function M.close_pane(window, pane)
             if not id or id == 'cancel' then return end
 
             -- Quitter le workspace d'inspection avant de le vider, sinon la
-            -- fenêtre se fermerait avec son dernier onglet.
+            -- fenêtre se fermerait avec son dernier onglet. Retour au workspace
+            -- de l'agent (le nom du repo ne correspond pas forcément à un workspace).
             if w:active_workspace() == ctx.inspect_ws then
-                w:perform_action(act.SwitchToWorkspace { name = ctx.repo }, p)
+                local back = ctx.agent_ws or ctx.repo
+                if back == ctx.inspect_ws then back = 'default' end
+                w:perform_action(act.SwitchToWorkspace { name = back }, p)
             end
             kill_panes(ctx)
 
             local msg = 'Onglets fermés'
             if id == 'remove' then
-                local ok, err = git(ctx.root, 'worktree', 'remove', ctx.worktree)
+                local ok, _, err = git(ctx.root, 'worktree', 'remove', ctx.worktree)
                 if ok then
                     git(ctx.root, 'branch', '-d', st.branch)
                     msg = 'Worktree ' .. ctx.task .. ' supprimé'
