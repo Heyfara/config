@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""Vue latérale WezTerm : workspaces → onglets → agents Claude Code.
+
+Lancé par agents/panel.lua (LEADER+b) dans un split à gauche. Lit
+`wezterm cli list` et les fichiers d'état de bin/agent-hook. Les actions
+remontent à WezTerm par la user var `agent_panel` (JSON en base64).
+
+Touches : j/k ou flèches, g/G, Entrée aller, i inspecter, x clôturer,
+q/Échap fermer. Clic = aller, molette = déplacer.
+"""
+import base64
+import json
+import os
+import re
+import select
+import subprocess
+import sys
+import termios
+import textwrap
+import time
+import tty
+
+SOCKET = os.environ.get("WEZTERM_UNIX_SOCKET", "")
+SELF_PANE = int(os.environ.get("WEZTERM_PANE", "-1"))
+WEZTERM = os.environ.get("AGENT_PANEL_WEZTERM") or "wezterm"
+STATE_DIR = os.path.join(
+    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "wezterm-agents"
+)
+SUB_SEP = " › "
+
+# Catppuccin Mocha (comme agents/theme.lua)
+C = dict(
+    crust="#11111b", mantle="#181825", base="#1e1e2e", surface0="#313244", surface1="#45475a",
+    overlay0="#6c7086", overlay1="#7f849c", subtext0="#a6adc8", subtext1="#bac2de",
+    text="#cdd6f4", lavender="#b4befe", green="#a6e3a1", yellow="#f9e2af", peach="#fab387",
+    red="#f38ba8",
+)
+ICON = dict(
+    permission="\U000f08ee", question="\U000f1738", done="\U000f05e0", working="\U000f06a9",
+    idle="\U000f167a", workspace="\U000f024b", window="\U000f10ac",
+)
+PRIORITY = {"waiting": 1, "done": 2, "working": 3, "idle": 4}
+BG = C["mantle"]
+
+
+def rgb(hexa):
+    h = hexa.lstrip("#")
+    return f"{int(h[0:2], 16)};{int(h[2:4], 16)};{int(h[4:6], 16)}"
+
+
+def fg(hexa):
+    return f"\033[38;2;{rgb(hexa)}m"
+
+
+def bg(hexa):
+    return f"\033[48;2;{rgb(hexa)}m"
+
+
+BOLD, ITALIC, RESET = "\033[1m", "\033[3m", "\033[22;23m"
+
+
+def clean_title(title):
+    return re.sub(r"^[^\w\-~/.]+", "", title or "")
+
+
+def elapsed(ts):
+    d = int(time.time() - (ts or 0))
+    if d < 60:
+        return f"{d}s"
+    if d < 3600:
+        return f"{d // 60}m"
+    if d < 86400:
+        return f"{d // 3600}h"
+    return f"{d // 86400}j"
+
+
+def truncate(s, n):
+    return s if len(s) <= n else s[: max(n - 1, 0)] + "…"
+
+
+# ── Données ─────────────────────────────────────────────────────────────
+
+def load_agents():
+    agents = {}
+    try:
+        names = os.listdir(STATE_DIR)
+    except OSError:
+        return agents
+    for name in names:
+        m = re.match(r"^(\d+)\.json$", name)
+        if not m:
+            continue
+        try:
+            with open(os.path.join(STATE_DIR, name)) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if data.get("socket") == SOCKET:
+            agents[int(m.group(1))] = data
+    return agents
+
+
+_git_cache = {}
+
+
+def git_stats(cwd):
+    """'+142 −18 · 3 fichiers' pour le worktree de l'agent (cache 5 s)."""
+    m = re.match(r"^(.*/\.claude/worktrees/[^/]+)", cwd or "")
+    if not m:
+        return None
+    wt = m.group(1)
+    hit = _git_cache.get(wt)
+    if hit and time.time() - hit[0] < 5:
+        return hit[1]
+    stats = None
+    try:
+        out = subprocess.run(["git", "-C", wt, "diff", "--shortstat", "HEAD"],
+                             capture_output=True, text=True, timeout=2).stdout
+        new = subprocess.run(["git", "-C", wt, "ls-files", "--others", "--exclude-standard"],
+                             capture_output=True, text=True, timeout=2).stdout
+        files = re.search(r"(\d+) files? changed", out)
+        ins = re.search(r"(\d+) insertion", out)
+        dels = re.search(r"(\d+) deletion", out)
+        n_new = len([l for l in new.splitlines() if l.strip()])
+        stats = dict(
+            files=int(files.group(1)) if files else 0,
+            ins=int(ins.group(1)) if ins else 0,
+            dels=int(dels.group(1)) if dels else 0,
+            new=n_new,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    _git_cache[wt] = (time.time(), stats)
+    return stats
+
+
+def collect():
+    """Arbre : [{name, short, child, current, windows: [{index, mine, tabs: [...]}]}]"""
+    try:
+        out = subprocess.run([WEZTERM, "cli", "list", "--format", "json"],
+                             capture_output=True, text=True, timeout=3).stdout
+        panes = json.loads(out)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+    agents = load_agents()
+
+    my_ws, my_window = None, None
+    for p in panes:
+        if p["pane_id"] == SELF_PANE:
+            my_ws, my_window = p["workspace"], p["window_id"]
+
+    # workspace -> window_id -> tab_id -> [panes] (ordre de cli list)
+    tree = {}
+    for p in panes:
+        if p["pane_id"] == SELF_PANE:
+            continue
+        tree.setdefault(p["workspace"], {}).setdefault(p["window_id"], {}).setdefault(p["tab_id"], []).append(p)
+
+    names = sorted(tree)
+    ordered = []
+    for name in names:
+        if SUB_SEP in name:
+            if name.split(SUB_SEP, 1)[0] not in tree:
+                ordered.append((name, name, False))
+            continue
+        ordered.append((name, name, False))
+        for sub in names:
+            if sub.startswith(name + SUB_SEP):
+                ordered.append((sub, sub[len(name) + len(SUB_SEP):], True))
+
+    result = []
+    for name, short, child in ordered:
+        windows = []
+        for wi, (window_id, tabs) in enumerate(tree[name].items(), 1):
+            tab_rows = []
+            for ti, (tab_id, tab_panes) in enumerate(tabs.items(), 1):
+                best = None
+                for p in tab_panes:
+                    a = agents.get(p["pane_id"])
+                    if a and (best is None or PRIORITY.get(a.get("state"), 9) < PRIORITY.get(best[1].get("state"), 9)):
+                        best = (p, a)
+                active = next((p for p in tab_panes if p.get("is_active")), tab_panes[0])
+                target = best[0] if best else active
+                title = tab_panes[0].get("tab_title") or ""
+                if not title:
+                    if best and "/.claude/worktrees/" in (best[1].get("cwd") or ""):
+                        title = best[1]["cwd"].split("/.claude/worktrees/")[1].split("/")[0]
+                    else:
+                        title = clean_title(target.get("title"))
+                tab_rows.append(dict(
+                    index=ti, tab_id=tab_id, pane_id=target["pane_id"], title=title,
+                    agent=best[1] if best else None, mine=tab_id == _self_tab(panes),
+                ))
+            windows.append(dict(index=wi, mine=window_id == my_window, tabs=tab_rows))
+        result.append(dict(name=name, short=short, child=child, current=name == my_ws, windows=windows))
+    return result
+
+
+def _self_tab(panes):
+    for p in panes:
+        if p["pane_id"] == SELF_PANE:
+            return p["tab_id"]
+    return None
+
+
+# ── Rendu ───────────────────────────────────────────────────────────────
+
+def agent_style(a):
+    s = a.get("state")
+    if s == "waiting":
+        return (ICON["question"] if a.get("kind") == "question" else ICON["permission"]), C["red"]
+    if s == "done":
+        return ICON["done"], C["yellow"]
+    if s == "working":
+        return ICON["working"], C["green"]
+    return ICON["idle"], C["overlay0"]
+
+
+def build(tree, width):
+    """Lignes [(texte_ansi, item_index)] + items [(type, valeur)]."""
+    lines, items = [], []
+    inner = width - 2
+
+    def add(text, item):
+        lines.append((text, item))
+
+    counts = {"waiting": 0, "done": 0, "working": 0}
+    for ws in tree:
+        for w in ws["windows"]:
+            for t in w["tabs"]:
+                if t["agent"] and t["agent"].get("state") in counts:
+                    counts[t["agent"]["state"]] += 1
+    badge = ""
+    for key, icon, color in (("waiting", ICON["permission"], C["red"]), ("done", ICON["done"], C["yellow"]),
+                             ("working", ICON["working"], C["green"])):
+        if counts[key]:
+            badge += f"{fg(color)}{icon} {counts[key]}  "
+    add(f" {fg(C['lavender'])}{BOLD}Agents & onglets{RESET}  {badge}", None)
+    add("", None)
+
+    for ws in tree:
+        item = len(items)
+        items.append(("ws", ws["name"]))
+        indent = "  " if ws["child"] else ""
+        marker = f"{fg(C['lavender'])}▶ " if ws["current"] else "  "
+        if ws["child"]:
+            label = f"{fg(C['peach'])}{BOLD}└ {truncate(ws['short'], inner - 6)}{RESET}"
+        else:
+            label = f"{fg(C['lavender'])}{BOLD}{ICON['workspace']} {truncate(ws['short'], inner - 4)}{RESET}"
+        add(f"{marker}{indent}{label}", item)
+
+        multi = len(ws["windows"]) > 1
+        for w in ws["windows"]:
+            sub = "  " if multi else ""
+            if multi:
+                mine = " (celle-ci)" if w["mine"] else ""
+                add(f"  {indent}{fg(C['overlay1'])}{ICON['window']} fenêtre {w['index']}{mine}", None)
+            for t in w["tabs"]:
+                item = len(items)
+                items.append(("pane", t["pane_id"]))
+                pad = f"  {indent}{sub}"
+                num = f"{fg(C['overlay0'])}{t['index']:>2}"
+                a = t["agent"]
+                room = inner - len(pad) - 5
+                if a:
+                    icon, color = agent_style(a)
+                    add(f"{pad}{num} {fg(color)}{icon} {fg(C['text'])}{truncate(t['title'], room)}", item)
+                    msg = a.get("message") or ("travaille…" if a.get("state") == "working" else a.get("task") or "")
+                    wrap = textwrap.wrap(msg, max(inner - len(pad) - 5, 10))[:2]
+                    if len(textwrap.wrap(msg, max(inner - len(pad) - 5, 10))) > 2:
+                        wrap[-1] = truncate(wrap[-1] + " …", inner - len(pad) - 5)
+                    for line in wrap:
+                        add(f"{pad}     {fg(C['subtext0'])}{ITALIC}{line}{RESET}", item)
+                    stats = git_stats(a.get("cwd"))
+                    meta = ""
+                    if stats and (stats["files"] or stats["new"]):
+                        meta += f"{fg(C['green'])}+{stats['ins']} {fg(C['red'])}−{stats['dels']} "
+                        meta += f"{fg(C['overlay1'])}{stats['files']} fich."
+                        if stats["new"]:
+                            meta += f" +{stats['new']} nouv."
+                        meta += "  "
+                    meta += f"{fg(C['overlay0'])}{elapsed(a.get('ts'))}"
+                    add(f"{pad}     {meta}", item)
+                else:
+                    here = f" {fg(C['overlay0'])}(ici)" if t["mine"] else ""
+                    add(f"{pad}{num}   {fg(C['subtext1'])}{truncate(t['title'], room - 5)}{here}", item)
+        add("", None)
+    return lines, items
+
+
+def render(lines, sel, scroll, height, width):
+    out = ["\033[H"]
+    footer = f"{fg(C['overlay0'])} j/k ⏎ aller · i inspecter · x clore · q"
+    body_h = height - 1
+    for row in range(body_h):
+        idx = scroll + row
+        if idx < len(lines):
+            text, item = lines[idx]
+            back = C["surface0"] if item is not None and item == sel else BG
+            out.append(f"{bg(back)}{text}\033[K")
+        else:
+            out.append(f"{bg(BG)}\033[K")
+        out.append(f"{bg(BG)}{fg(C['text'])}\r\n")
+    out.append(f"{bg(BG)}{footer}\033[K")
+    sys.stdout.write("".join(out))
+    sys.stdout.flush()
+
+
+# ── Actions ─────────────────────────────────────────────────────────────
+
+_nonce = 0
+
+
+def send(cmd, kind, value):
+    global _nonce
+    _nonce += 1
+    payload = json.dumps({"cmd": cmd, "kind": kind, "value": value, "n": _nonce})
+    b64 = base64.b64encode(payload.encode()).decode()
+    sys.stdout.write(f"\033]1337;SetUserVar=agent_panel={b64}\007")
+    sys.stdout.flush()
+
+
+def main():
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    sys.stdout.write("\033]2;agent-panel\007\033[?1049h\033[?25l\033[?7l\033[?1000h\033[?1006h")
+    tty.setraw(fd)
+
+    sel_key = None  # (type, valeur) sélectionné, stable entre rafraîchissements
+    scroll = 0
+    first = True
+    last = 0.0
+    tree, lines, items = [], [], []
+    try:
+        while True:
+            width, height = os.get_terminal_size()
+            if time.time() - last >= 1:
+                tree = collect()
+                last = time.time()
+            lines, items = build(tree, width)
+            if first:
+                # Sélection initiale : onglet d'où le panneau a été ouvert
+                for ws in tree:
+                    for w in ws["windows"]:
+                        for t in w["tabs"]:
+                            if t["mine"]:
+                                sel_key = ("pane", t["pane_id"])
+                first = False
+            sel = items.index(sel_key) if sel_key in items else (0 if items else None)
+
+            if sel is not None:
+                rows = [i for i, (_, it) in enumerate(lines) if it == sel]
+                if rows:
+                    if rows[0] < scroll:
+                        scroll = rows[0]
+                    elif rows[-1] >= scroll + height - 1:
+                        scroll = rows[-1] - (height - 2)
+            render(lines, sel, scroll, height, width)
+
+            ready, _, _ = select.select([fd], [], [], 1.0)
+            if not ready:
+                continue
+            data = os.read(fd, 64)
+            n = len(items)
+
+            def move(delta):
+                nonlocal sel_key
+                if n:
+                    cur = sel if sel is not None else 0
+                    sel_key = items[max(0, min(n - 1, cur + delta))]
+
+            mouse = re.match(rb"\x1b\[<(\d+);(\d+);(\d+)([Mm])", data)
+            if mouse:
+                b, y, kind = int(mouse.group(1)), int(mouse.group(3)), mouse.group(4)
+                if b == 64:
+                    move(-1)
+                elif b == 65:
+                    move(1)
+                elif b == 0 and kind == b"M":
+                    idx = scroll + y - 1
+                    if 0 <= idx < len(lines) and lines[idx][1] is not None:
+                        sel_key = items[lines[idx][1]]
+                        send("go", *sel_key)
+                        time.sleep(0.1)
+                        return
+                continue
+            if data in (b"j", b"\x1b[B"):
+                move(1)
+            elif data in (b"k", b"\x1b[A"):
+                move(-1)
+            elif data == b"g":
+                move(-n)
+            elif data == b"G":
+                move(n)
+            elif data in (b"\r", b"\n") and sel_key:
+                send("go", *sel_key)
+                time.sleep(0.1)
+                return
+            elif data == b"i" and sel_key and sel_key[0] == "pane":
+                send("inspect", *sel_key)
+                time.sleep(0.1)
+                return
+            elif data == b"x" and sel_key and sel_key[0] == "pane":
+                send("close", *sel_key)
+                time.sleep(0.1)
+                return
+            elif data in (b"q", b"\x1b", b"\x03"):
+                return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        sys.stdout.write("\033[?1000l\033[?1006l\033[?7h\033[?25h\033[?1049l")
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

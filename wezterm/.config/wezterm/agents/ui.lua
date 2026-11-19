@@ -37,7 +37,14 @@ wezterm.on('format-tab-title', function(tab, _, _, _, hover, max_width)
 
     local label = tab.tab_title
     if not label or label == '' then
-        label = (agent and agent.worktree) or state.clean_title(tab.active_pane.title)
+        local title = tab.active_pane.title
+        if title == 'agent-panel' then -- vue latérale active : titre du panneau voisin
+            local ok, mux_tab = pcall(wezterm.mux.get_tab, tab.tab_id)
+            for _, p in ipairs(ok and mux_tab and mux_tab:panes() or {}) do
+                if p:get_title() ~= 'agent-panel' then title = p:get_title() break end
+            end
+        end
+        label = (agent and agent.worktree) or state.clean_title(title)
     end
 
     local bg, fg = c.mantle, c.overlay1

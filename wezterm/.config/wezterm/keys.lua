@@ -2,6 +2,7 @@ local wezterm = require 'wezterm'
 local projects = require 'projects'
 local pickers = require 'agents.pickers'
 local tasks = require 'agents.tasks'
+local panel = require 'agents.panel'
 
 local module = {}
 
@@ -51,6 +52,12 @@ function module.apply_to_config(config)
             key = ',',
             mods = 'LEADER',
             action = tasks.rename_tab(),
+        },
+        {
+            key = 'b',
+            mods = 'LEADER',
+            -- Vue latérale workspaces / onglets / agents
+            action = panel.toggle(),
         },
         {
             key = 'i',

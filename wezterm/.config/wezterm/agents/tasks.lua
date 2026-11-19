@@ -91,8 +91,8 @@ end
 -- Contexte de la tâche liée au panneau courant, qu'on soit dans l'onglet de
 -- l'agent ou dans le workspace d'inspection :
 -- { repo, task, worktree, root, agent_pane_id, inspect_ws }
-function M.context(window, pane)
-    local ws = window:active_workspace()
+function M.context(pane)
+    local ws = pane:tab():window():get_workspace()
     local agents = state.scan()
     local ctx
 
@@ -139,19 +139,22 @@ local function workspace_exists(name)
 end
 
 -- LEADER+i : ouvre (ou rejoint) le workspace « repo › tâche » sur le worktree
+-- `pane` : panneau de la tâche, pas forcément dans la fenêtre affichée
+function M.inspect_pane(window, pane)
+    local ctx = M.context(pane)
+    if not ctx then
+        window:toast_notification('Inspecter', 'Aucune tâche claude -w dans cet onglet', nil, 4000)
+        return
+    end
+    if workspace_exists(ctx.inspect_ws) then
+        window:perform_action(act.SwitchToWorkspace { name = ctx.inspect_ws }, window:active_pane())
+    else
+        projects.open_layout(window, window:active_pane(), ctx.inspect_ws, ctx.worktree)
+    end
+end
+
 function M.inspect()
-    return wezterm.action_callback(function(window, pane)
-        local ctx = M.context(window, pane)
-        if not ctx then
-            window:toast_notification('Inspecter', 'Aucune tâche claude -w dans cet onglet', nil, 4000)
-            return
-        end
-        if workspace_exists(ctx.inspect_ws) then
-            window:perform_action(act.SwitchToWorkspace { name = ctx.inspect_ws }, pane)
-        else
-            projects.open_layout(window, pane, ctx.inspect_ws, ctx.worktree)
-        end
-    end)
+    return wezterm.action_callback(M.inspect_pane)
 end
 
 -- État git du worktree : existe ? propre ? poussé ? (+ texte pour l'humain)
@@ -208,57 +211,59 @@ end
 
 -- LEADER+w : ferme l'inspection et l'onglet de l'agent ; supprime le worktree
 -- seulement s'il est propre et poussé.
+function M.close_pane(window, pane)
+    local ctx = M.context(pane)
+    if not ctx then
+        window:toast_notification('Clôturer', 'Aucune tâche claude -w dans cet onglet', nil, 4000)
+        return
+    end
+    local st = worktree_status(ctx)
+
+    local agent_busy = false
+    if ctx.agent_pane_id then
+        local a = state.cached(ctx.agent_pane_id)
+        agent_busy = a and a.state == 'working'
+    end
+
+    local choices = {}
+    if st.exists and st.clean and st.pushed then
+        table.insert(choices, { id = 'remove', label = 'Fermer les onglets et supprimer le worktree' })
+    end
+    table.insert(choices, { id = 'keep', label = st.exists and 'Fermer les onglets, garder le worktree' or 'Fermer les onglets' })
+    table.insert(choices, { id = 'cancel', label = 'Annuler' })
+
+    local warning = agent_busy and '  ⚠ l\'agent travaille encore' or ''
+    window:perform_action(act.InputSelector {
+        title = 'Clôturer ' .. ctx.task,
+        description = ctx.task .. ' : ' .. st.summary .. warning,
+        choices = choices,
+        action = wezterm.action_callback(function(w, p, id)
+            if not id or id == 'cancel' then return end
+
+            -- Quitter le workspace d'inspection avant de le vider, sinon la
+            -- fenêtre se fermerait avec son dernier onglet.
+            if w:active_workspace() == ctx.inspect_ws then
+                w:perform_action(act.SwitchToWorkspace { name = ctx.repo }, p)
+            end
+            kill_panes(ctx)
+
+            local msg = 'Onglets fermés'
+            if id == 'remove' then
+                local ok, err = git(ctx.root, 'worktree', 'remove', ctx.worktree)
+                if ok then
+                    git(ctx.root, 'branch', '-d', st.branch)
+                    msg = 'Worktree ' .. ctx.task .. ' supprimé'
+                else
+                    msg = 'Échec de git worktree remove : ' .. err
+                end
+            end
+            w:toast_notification('Clôturer', msg, nil, 5000)
+        end),
+    }, window:active_pane())
+end
+
 function M.close_task()
-    return wezterm.action_callback(function(window, pane)
-        local ctx = M.context(window, pane)
-        if not ctx then
-            window:toast_notification('Clôturer', 'Aucune tâche claude -w dans cet onglet', nil, 4000)
-            return
-        end
-        local st = worktree_status(ctx)
-
-        local agent_busy = false
-        if ctx.agent_pane_id then
-            local a = state.cached(ctx.agent_pane_id)
-            agent_busy = a and a.state == 'working'
-        end
-
-        local choices = {}
-        if st.exists and st.clean and st.pushed then
-            table.insert(choices, { id = 'remove', label = 'Fermer les onglets et supprimer le worktree' })
-        end
-        table.insert(choices, { id = 'keep', label = st.exists and 'Fermer les onglets, garder le worktree' or 'Fermer les onglets' })
-        table.insert(choices, { id = 'cancel', label = 'Annuler' })
-
-        local warning = agent_busy and '  ⚠ l\'agent travaille encore' or ''
-        window:perform_action(act.InputSelector {
-            title = 'Clôturer ' .. ctx.task,
-            description = ctx.task .. ' : ' .. st.summary .. warning,
-            choices = choices,
-            action = wezterm.action_callback(function(w, p, id)
-                if not id or id == 'cancel' then return end
-
-                -- Quitter le workspace d'inspection avant de le vider, sinon la
-                -- fenêtre se fermerait avec son dernier onglet.
-                if w:active_workspace() == ctx.inspect_ws then
-                    w:perform_action(act.SwitchToWorkspace { name = ctx.repo }, p)
-                end
-                kill_panes(ctx)
-
-                local msg = 'Onglets fermés'
-                if id == 'remove' then
-                    local ok, err = git(ctx.root, 'worktree', 'remove', ctx.worktree)
-                    if ok then
-                        git(ctx.root, 'branch', '-d', st.branch)
-                        msg = 'Worktree ' .. ctx.task .. ' supprimé'
-                    else
-                        msg = 'Échec de git worktree remove : ' .. err
-                    end
-                end
-                w:toast_notification('Clôturer', msg, nil, 5000)
-            end),
-        }, pane)
-    end)
+    return wezterm.action_callback(M.close_pane)
 end
 
 return M
