@@ -73,6 +73,16 @@ local function send(window, agent)
     end
 end
 
+-- L'agent est-il sous les yeux ? Fenêtre qui l'affiche au premier plan et
+-- panneau actif. gui_window() lève une erreur si son workspace n'est pas affiché.
+local function is_visible(agent)
+    local mux_window = agent.mux_window
+    if not mux_window then return false end
+    local ok, gui = pcall(function() return mux_window:gui_window() end)
+    if not ok or not gui then return false end
+    return gui:is_focused() and gui:active_pane():pane_id() == agent.pane_id
+end
+
 -- Appelé à chaque update-status : notifie les transitions vers waiting/done.
 -- Signature = état + type + message : pas de doublon entre fenêtres ni sur
 -- des événements répétés, mais une nouvelle attente après un « working » renotifie.
@@ -81,9 +91,6 @@ function M.check(window, agents)
     local first_run = seen == nil
     seen = seen or {}
 
-    local focused = window:is_focused()
-    local active_pane_id = window:active_pane():pane_id()
-
     local next_seen = {}
     for _, a in ipairs(agents) do
         local key = tostring(a.pane_id)
@@ -91,8 +98,7 @@ function M.check(window, agents)
         if notifiable then
             local sig = a.state .. '|' .. a.kind .. '|' .. a.message
             next_seen[key] = sig
-            local visible = focused and a.pane_id == active_pane_id
-            if seen[key] ~= sig and not first_run and not visible then
+            if seen[key] ~= sig and not first_run and not is_visible(a) then
                 send(window, a)
             end
         end
