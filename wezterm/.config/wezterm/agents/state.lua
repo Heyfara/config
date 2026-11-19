@@ -4,7 +4,9 @@ local wezterm = require 'wezterm'
 
 local M = {}
 
-M.dir = (os.getenv('XDG_STATE_HOME') or (wezterm.home_dir .. '/.local/state')) .. '/wezterm-agents'
+-- Chemin fixe, identique à bin/agent-hook et bin/agent-panel (pas de
+-- $XDG_STATE_HOME : la GUI ne voit pas les variables du shell, surtout sur macOS)
+M.dir = wezterm.home_dir .. '/.local/state/wezterm-agents'
 
 -- Workspaces d'inspection : « repo › tâche »
 M.SUB_SEP = ' › '
