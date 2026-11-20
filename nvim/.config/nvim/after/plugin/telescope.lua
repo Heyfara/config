@@ -6,6 +6,9 @@ require('telescope').setup{
                 ["<C-h>"] = "which_key",
                 ['<c-d>'] = actions.delete_buffer
             }
+        },
+        file_ignore_patterns = {
+            "%.sql"
         }
     },
 }

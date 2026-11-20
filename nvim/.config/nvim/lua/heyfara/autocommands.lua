@@ -53,3 +53,14 @@ vim.api.nvim_create_autocmd('LspAttach', {
     end
   end,
 })
+
+-- Afficher le diagnostic de la ligne dans un flottant quand le curseur s'arrête
+vim.api.nvim_create_autocmd('CursorHold', {
+  desc = 'Diagnostic de la ligne en flottant',
+  callback = function()
+    vim.diagnostic.open_float(nil, {
+      focus = false,
+      scope = 'line',
+    })
+  end,
+})

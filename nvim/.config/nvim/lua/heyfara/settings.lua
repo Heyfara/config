@@ -33,7 +33,15 @@ vim.opt.splitright = true
 vim.opt.splitbelow = true
 
 vim.diagnostic.config({
-    virtual_text = true,
+    virtual_text = false,
+    signs = true,
+    underline = true,
+    update_in_insert = false,
+    severity_sort = true,
+    float = {
+        border = "rounded",
+        source = true,
+    },
 })
 
 -- Filetype `twig` simple pour *.twig et *.html.twig (remplace twig.vim, qui
