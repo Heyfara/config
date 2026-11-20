@@ -4,7 +4,8 @@ local module = {}
 
 function module.apply_to_config(config)
     config.color_scheme = 'Catppuccin Mocha'
-    --config.native_macos_fullscreen_mode = true
+    -- macOS : le plein écran ouvre un nouvel espace (Space) au lieu de rester dans l'actuel
+    config.native_macos_fullscreen_mode = true
 
     -- With ligatures 
     --config.font = wezterm.font('JetBrainsMono Nerd Font')
