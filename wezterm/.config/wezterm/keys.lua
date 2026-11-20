@@ -1,5 +1,8 @@
 local wezterm = require 'wezterm'
 local projects = require 'projects'
+local pickers = require 'agents.pickers'
+local tasks = require 'agents.tasks'
+local panel = require 'agents.panel'
 
 local module = {}
 
@@ -30,8 +33,49 @@ function module.apply_to_config(config)
         {
             key = 'f',
             mods = 'LEADER',
-            -- Present a list of existing workspaces
-            action = wezterm.action.ShowLauncherArgs { flags = 'FUZZY|WORKSPACES' },
+            -- Workspaces en arborescence avec badges d'agents
+            action = pickers.workspaces(),
+        },
+        {
+            key = 's',
+            mods = 'LEADER',
+            -- Tous les agents, triés par urgence
+            action = pickers.agents(),
+        },
+        {
+            key = 'n',
+            mods = 'LEADER',
+            -- Nouvelle tâche : onglet + claude -w <nom>
+            action = tasks.new_task(),
+        },
+        {
+            key = ',',
+            mods = 'LEADER',
+            action = tasks.rename_tab(),
+        },
+        {
+            key = 'b',
+            mods = 'LEADER',
+            -- Vue latérale workspaces / onglets / agents
+            action = panel.toggle(),
+        },
+        {
+            key = 'i',
+            mods = 'LEADER',
+            -- Inspecter la tâche : workspace « repo › tâche » sur le worktree
+            action = tasks.inspect(),
+        },
+        {
+            key = 'w',
+            mods = 'LEADER',
+            -- Clôturer la tâche : onglets + worktree si propre et poussé
+            action = tasks.close_task(),
+        },
+        {
+            key = 'j',
+            mods = 'LEADER',
+            -- Agent qui attend depuis le plus longtemps
+            action = pickers.jump_next(),
         },
         {
             key = 'c',
@@ -55,29 +99,5 @@ function module.apply_to_config(config)
         },
     }
 end
-
-wezterm.on('update-status', function(window)
-    -- Grab the utf8 character for the "powerline" left facing
-    -- solid arrow.
-    local SOLID_LEFT_ARROW = utf8.char(0xe0b2)
-
-    -- Grab the current window's configuration, and from it the
-    -- palette (this is the combination of your chosen colour scheme
-    -- including any overrides).
-    local color_scheme = window:effective_config().resolved_palette
-    local bg = color_scheme.background
-    local fg = color_scheme.foreground
-
-    window:set_right_status(wezterm.format({
-        -- First, we draw the arrow...
-        { Background = { Color = 'none' } },
-        { Foreground = { Color = bg } },
-        { Text = SOLID_LEFT_ARROW },
-        -- Then we draw our text
-        { Background = { Color = bg } },
-        { Foreground = { Color = fg } },
-        { Text = ' ' .. wezterm.hostname() .. ' ' },
-    }))
-end)
 
 return module;

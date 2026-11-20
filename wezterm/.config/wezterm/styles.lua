@@ -4,7 +4,8 @@ local module = {}
 
 function module.apply_to_config(config)
     config.color_scheme = 'Catppuccin Mocha'
-    --config.native_macos_fullscreen_mode = true
+    -- macOS : le plein écran ouvre un nouvel espace (Space) au lieu de rester dans l'actuel
+    config.native_macos_fullscreen_mode = true
 
     -- With ligatures 
     --config.font = wezterm.font('JetBrainsMono Nerd Font')
@@ -13,6 +14,13 @@ function module.apply_to_config(config)
 
     --config.font = wezterm.font('JetBrains Mono')
     --config.font_size = 14
+    -- macOS : on garde la police et la taille d'avant (12 par défaut, trop petit)
+    if wezterm.target_triple:find('darwin') then
+        config.font = wezterm.font('MesloLGL Nerd Font')
+        config.font_size = 14
+        config.freetype_load_target = 'Light'
+        config.freetype_render_target = 'Light'
+    end
     --config.freetype_load_target = 'Light'
     --config.freetype_render_target = 'Light'
 

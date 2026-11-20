@@ -35,41 +35,47 @@ function module.choose_project()
             -- when that happens.
             if not label then return end
 
-            -- Switch to the workspace
-            child_window:perform_action(wezterm.action.SwitchToWorkspace {
-                name = label:match("([^/]+)$"),
-                spawn = { cwd = label },
-            }, child_pane)
-
-            wezterm.sleep_ms(100)
-
-            local first_pane = child_window:active_pane()
-            child_window:perform_action(wezterm.action.SendString("nvim\n"), first_pane)
-
-            child_window:perform_action(wezterm.action.SpawnTab("CurrentPaneDomain"), first_pane)
-
-            wezterm.sleep_ms(100)
-
-            child_window:perform_action(wezterm.action.SplitHorizontal { domain = "CurrentPaneDomain" }, first_pane)
-
-            wezterm.sleep_ms(100)
-
-            local right_pane = child_window:active_pane()
-            child_window:perform_action(wezterm.action.ActivatePaneDirection("Left"), right_pane)
-            local left_pane = child_window:active_pane()
-
-            child_window:perform_action(wezterm.action.ActivatePaneDirection("Right"), left_pane)
-
-            child_window:perform_action(wezterm.action.SpawnTab("CurrentPaneDomain"), first_pane)
-
-            wezterm.sleep_ms(100)
-
-            local new_pane = child_window:active_pane()
-            child_window:perform_action(wezterm.action.SendString("lazygit\n"), new_pane)
-
-            first_pane:activate()
+            module.open_layout(child_window, child_pane, label:match("([^/]+)$"), label)
         end),
     }
+end
+
+-- Ouvre (ou crée) le workspace `name` sur `cwd` avec la disposition de travail :
+-- onglet nvim, onglet avec deux splits, onglet lazygit.
+-- Réutilisé par l'inspection des tâches d'agent (étape 6).
+function module.open_layout(window, pane, name, cwd)
+    window:perform_action(wezterm.action.SwitchToWorkspace {
+        name = name,
+        spawn = { cwd = cwd },
+    }, pane)
+
+    wezterm.sleep_ms(100)
+
+    local first_pane = window:active_pane()
+    window:perform_action(wezterm.action.SendString("nvim\n"), first_pane)
+
+    window:perform_action(wezterm.action.SpawnTab("CurrentPaneDomain"), first_pane)
+
+    wezterm.sleep_ms(100)
+
+    window:perform_action(wezterm.action.SplitHorizontal { domain = "CurrentPaneDomain" }, first_pane)
+
+    wezterm.sleep_ms(100)
+
+    local right_pane = window:active_pane()
+    window:perform_action(wezterm.action.ActivatePaneDirection("Left"), right_pane)
+    local left_pane = window:active_pane()
+
+    window:perform_action(wezterm.action.ActivatePaneDirection("Right"), left_pane)
+
+    window:perform_action(wezterm.action.SpawnTab("CurrentPaneDomain"), first_pane)
+
+    wezterm.sleep_ms(100)
+
+    local new_pane = window:active_pane()
+    window:perform_action(wezterm.action.SendString("lazygit\n"), new_pane)
+
+    first_pane:activate()
 end
 
 return module
