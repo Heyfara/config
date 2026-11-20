@@ -231,6 +231,11 @@ function M.close_pane(window, pane)
     local choices = {}
     if st.exists and st.clean and st.pushed then
         table.insert(choices, { id = 'remove', label = 'Fermer les onglets et supprimer le worktree' })
+    elseif st.exists then
+        -- Supprime quand même : les modifications non commitées sont perdues,
+        -- la branche n'est supprimée que si git l'accepte (commits non poussés gardés).
+        local risk = st.clean and 'branche gardée si non poussée' or 'modifications non commitées perdues'
+        table.insert(choices, { id = 'force', label = 'Fermer les onglets et supprimer le worktree (⚠ ' .. risk .. ')' })
     end
     table.insert(choices, { id = 'keep', label = st.exists and 'Fermer les onglets, garder le worktree' or 'Fermer les onglets' })
     table.insert(choices, { id = 'cancel', label = 'Annuler' })
@@ -254,11 +259,15 @@ function M.close_pane(window, pane)
             kill_panes(ctx)
 
             local msg = 'Onglets fermés'
-            if id == 'remove' then
-                local ok, _, err = git(ctx.root, 'worktree', 'remove', ctx.worktree)
+            if id == 'remove' or id == 'force' then
+                local args = { 'worktree', 'remove', ctx.worktree }
+                if id == 'force' then table.insert(args, 3, '--force') end
+                local ok, _, err = git(ctx.root, table.unpack(args))
                 if ok then
-                    git(ctx.root, 'branch', '-d', st.branch)
                     msg = 'Worktree ' .. ctx.task .. ' supprimé'
+                    if not git(ctx.root, 'branch', '-d', st.branch) then
+                        msg = msg .. ', branche ' .. st.branch .. ' gardée (non fusionnée)'
+                    end
                 else
                     msg = 'Échec de git worktree remove : ' .. err
                 end
