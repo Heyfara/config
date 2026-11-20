@@ -13,6 +13,13 @@ function module.apply_to_config(config)
 
     --config.font = wezterm.font('JetBrains Mono')
     --config.font_size = 14
+    -- macOS : on garde la police et la taille d'avant (12 par défaut, trop petit)
+    if wezterm.target_triple:find('darwin') then
+        config.font = wezterm.font('MesloLGL Nerd Font')
+        config.font_size = 14
+        config.freetype_load_target = 'Light'
+        config.freetype_render_target = 'Light'
+    end
     --config.freetype_load_target = 'Light'
     --config.freetype_render_target = 'Light'
 
