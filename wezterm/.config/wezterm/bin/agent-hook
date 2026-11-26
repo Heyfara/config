@@ -52,12 +52,22 @@ def last_assistant_text(data):
     return ""
 
 
+def asks_question(text):
+    """Le tour pose-t-il des questions en texte ? Marqueur ❓ des tours de /interrogatoire."""
+    return "❓" in (text or "")
+
+
 def main():
     try:
         data = json.load(sys.stdin)
     except ValueError:
         data = {}
     event = data.get("hook_event_name", "")
+
+    # Outils d'un sous-agent (agent_id présent) : ils tournent parfois en arrière-plan
+    # et repasseraient en « working » un agent principal qui attend une réponse.
+    if data.get("agent_id") and event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
+        return
 
     if event == "SessionEnd":
         try:
@@ -98,7 +108,11 @@ def main():
         else:
             return  # idle_prompt & co : on garde l'état « done »
     elif event == "Stop":
-        state, message = "done", short(last_assistant_text(data)) or "Tour terminé"
+        text = last_assistant_text(data)
+        if asks_question(text):
+            state, message, kind = "waiting", short(text), "question"
+        else:
+            state, message = "done", short(text) or "Tour terminé"
     else:
         return
 
